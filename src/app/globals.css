@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+/*
+  A restrained, document-first palette: paper ground, near-black ink, one accent
+  for interaction, and semantic colours reserved for verification state, because
+  "verified" and "not found" are the two things a reader must never confuse.
+
+  System font stacks on purpose — no webfont fetch, so the interface paints
+  immediately and cannot half-render a font on a slow connection.
+*/
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --color-paper: #fbfaf7;
+  --color-surface: #ffffff;
+  --color-ink: #16181d;
+  --color-ink-soft: #4b525e;
+  --color-ink-muted: #767d8a;
+  --color-line: #e3e1dc;
+  --color-line-strong: #cfccc5;
+
+  --color-accent: #1f5f4f;
+  --color-accent-soft: #e8f1ee;
+  --color-accent-ink: #10352c;
+
+  --color-verified: #1f6f4a;
+  --color-verified-soft: #e7f5ec;
+  --color-warning: #8a5a00;
+  --color-warning-soft: #fdf3e0;
+  --color-danger: #9c2b2b;
+  --color-danger-soft: #fbeaea;
+  --color-info: #2b4e8a;
+  --color-info-soft: #eaf0fa;
+}
+
+html,
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: #d8e8e2;
+}
+
+/* Long documents: let the browser skip layout for off-screen pages. */
+.doc-page {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 900px;
+}
+
+mark.quote-hit {
+  background: #fdf0b8;
+  color: inherit;
+  padding: 1px 0;
+  border-radius: 2px;
+}
+
+mark.quote-hit[data-active="true"] {
+  background: #ffe27a;
+  box-shadow: 0 0 0 2px #f3c94b;
+}
+
+.prose-tight p {
+  margin-bottom: 0.6rem;
+}
+
+/* Scrollbars that do not dominate a dense two-pane workspace. */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

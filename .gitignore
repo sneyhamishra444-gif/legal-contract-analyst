@@ -1,0 +1,28 @@
+node_modules/
+.next/
+out/
+build/
+coverage/
+
+# Local database (SQLite writes app.db, its WAL and shared-memory files here)
+.data/
+*.sqlite
+*.db
+
+# Secrets — never commit these
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Tooling
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+
+# Test / demo artifacts
+test-results/
+playwright-report/
+demo/*.webm
+demo/*.mp4
+demo/frames/
