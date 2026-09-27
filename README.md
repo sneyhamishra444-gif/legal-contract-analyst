@@ -123,8 +123,12 @@ architecture and the more interesting one. Reasoning is in
 - **Visible progress.** Each round emits `step` events — "Searching for termination
   provisions…", which tool, which arguments, what came back — rendered as a live
   timeline that stays on the finished answer.
-- **Hard caps.** A round cap and a total tool-call budget (8) end the loop with an
-  honest "research cut short" badge.
+- **Hard caps.** A round cap, a total tool-call budget (8) and a wall-clock budget
+  (`AGENT_BUDGET_MS`, default 50s) end the loop with an honest "research cut short"
+  badge. The time budget exists because hosting platforms impose their own request
+  deadline: a slow provider would otherwise be killed mid-sentence with nothing
+  saved. Instead the app stops itself, writes the answer from the evidence it has,
+  and says the time limit was reached.
 - **Malformed calls survive.** An unknown tool name, missing arguments, wrong
   argument types or nonsense parameters produce a correction message back to the
   model. One repair attempt is made; after two consecutive unusable calls the loop
@@ -191,9 +195,9 @@ by the test suite.
   to read through its tools, so only the passages it asks for are ever sent.
 - **The app never answers as though it read more than it did.** Every answer carries
   a coverage report — chunks searched, documents searched, passages used — and a
-  sentence saying so, rendered in a banner under the answer. If the round or
-  tool-call budget runs out first, the answer is marked "research cut short" instead
-  of being presented as complete.
+  sentence saying so, rendered in a banner under the answer. If the round, tool-call
+  or time budget runs out first, the answer is marked "research cut short" instead of
+  being presented as complete.
 
 ---
 
@@ -249,6 +253,7 @@ immediately. They are generated — regenerate them with `npm run fixtures`.
 | `LLM_APP_URL`, `LLM_APP_TITLE` | — | Sent as `HTTP-Referer` / `X-Title` for OpenRouter. Optional. |
 | `LLM_MAX_TOKENS`, `LLM_TIMEOUT_MS` | `1200`, `60000` | Answer length and request timeout. |
 | `AGENT_MAX_ROUNDS` | `6` | Clamped to 2–10. |
+| `AGENT_BUDGET_MS` | `50000` | Wall-clock budget for one answer, research plus writing it. Clamped to 25000–600000. The default fits inside a 60-second serverless limit; research is stopped 18s before it so the answer can still be written and saved. |
 | `DATABASE_URL` | empty | Empty means local SQLite at `.data/app.db`. Set it to a Postgres URL in production. |
 | `SQLITE_PATH` | `.data/app.db` | Where the local database lives. |
 | `ALLOWED_ORIGINS` | empty | Comma-separated CORS origins; empty means same-origin only. |
@@ -289,13 +294,13 @@ The app is built for Vercel plus a hosted Postgres (Neon's free tier is enough).
 
 ## Tests
 
-88 tests across 5 files, run with `npm run verify`:
+89 tests across 5 files, run with `npm run verify`:
 
 | File | Covers |
 | --- | --- |
 | `tests/verify.test.ts` (28) | Normalisation and the whole verification ladder: exact, case, punctuation, hyphen-joined, invisible characters, ellipsis and bracketed insertions, cross-page quotes, duplicated wording and occurrence preference, paraphrases and fabrications, weak evidence. |
 | `tests/documents.test.ts` (18) | PDF/DOCX extraction, page maps, every rejection path (scanned, damaged, misnamed, legacy `.doc`, empty, oversized), chunk boundaries respecting clauses, clause outline, retrieval including the far end of the 153-page contract, and "no match" instead of a least-bad match. |
-| `tests/agent.test.ts` (14) | The agent loop end to end on the offline provider, tool dispatch, the round cap, malformed and invented tool calls, and abstention. |
+| `tests/agent.test.ts` (15) | The agent loop end to end on the offline provider, tool dispatch, the round cap, the wall-clock budget, malformed and invented tool calls, and abstention. |
 | `tests/compare.test.ts` (14) | Clause alignment, added/removed/reworded classification, significance scoring, and that a reworded clause is not reported as a substantive change. |
 | `tests/storage.test.ts` (14) | Schema portability, placeholder rewriting, insert/list/delete, duplicate detection by content hash, per-document history, keeping a stopped partial answer, comparison persistence. |
 

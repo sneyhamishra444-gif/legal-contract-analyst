@@ -362,4 +362,33 @@ describe("agent loop", () => {
     expect(quotes(events)).toHaveLength(0);
     expect(answer).toMatch(/could not find|not covered|does not appear/i);
   });
+
+  it("stops research at the time budget and says so, rather than being killed mid-answer", async () => {
+    // A one-second budget is below the amount reserved for writing the answer, so
+    // research has no time at all: the run must skip straight past the loop and
+    // report truncation, instead of searching and letting the host kill the
+    // request part-way through the answer.
+    const provider = scriptedProvider(
+      ['{"thought":"search","action":{"tool":"search_document","arguments":{"query":"liability cap"}}}'],
+      "The contract does not appear to cover the liability cap.",
+    );
+    const events = await collect(baseInput({ provider, budgetMs: 1_000 }));
+
+    const coverage = events.find((event) => event.type === "coverage");
+    expect(coverage?.type).toBe("coverage");
+    if (coverage?.type === "coverage") {
+      expect(coverage.coverage.truncated).toBe(true);
+      expect(coverage.coverage.rounds).toBe(0);
+    }
+    expect(warnings(events).join(" ")).toMatch(/time limit/i);
+
+    // The budget is not allowed to swallow the answer: it is still written and
+    // still returned as a completed message.
+    const done = events.find((event) => event.type === "done");
+    expect(done?.type).toBe("done");
+    if (done?.type === "done") {
+      expect(done.status).toBe("complete");
+      expect(done.content.trim().length).toBeGreaterThan(0);
+    }
+  });
 });

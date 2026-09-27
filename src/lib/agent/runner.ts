@@ -11,6 +11,10 @@
  *                 reported as truncation, not hidden.
  *   tool calls    a total cap as well as a round cap, so one round cannot fan
  *                 out into unlimited calls.
+ *   time          a wall-clock budget (AGENT_BUDGET_MS) on top of the round cap,
+ *                 because a hosting platform enforces its own request deadline.
+ *                 A budget produces a shorter answer that says it was cut short;
+ *                 without one the platform kills the stream and nothing is saved.
  *   malformed     an invented tool name, missing arguments, a nonsense argument
  *                 or unparseable JSON is answered with a message describing the
  *                 correct shape. One JSON parse failure triggers a single repair
@@ -24,7 +28,7 @@
  */
 
 import { getProvider } from "@/lib/llm";
-import { readAgentMaxRounds } from "@/lib/llm/config";
+import { readAgentBudgetMs, readAgentMaxRounds } from "@/lib/llm/config";
 import {
   LlmError,
   type ChatTurn,
@@ -50,10 +54,32 @@ export type RunAgentInput = {
   /** Injectable for tests. */
   provider?: LlmProvider;
   maxRounds?: number;
+  /** Whole-run wall-clock budget in milliseconds. Injectable for tests. */
+  budgetMs?: number;
 };
 
 const TOTAL_TOOL_CALL_BUDGET = 8;
 const MAX_CONSECUTIVE_MALFORMED = 2;
+
+/**
+ * How much of the run's time is held back for writing the answer.
+ *
+ * Research and answering draw on the same budget, and an answer that never gets
+ * written is worth nothing, so research is stopped this far before the deadline
+ * rather than being allowed to spend all of it searching.
+ */
+const ANSWER_ALLOWANCE_MS = 18_000;
+
+/**
+ * The caller's abort signal plus a deadline.
+ *
+ * Every provider call gets one, so no single slow request can consume the whole
+ * budget and leave the run with no time to answer.
+ */
+function withDeadline(signal: AbortSignal | undefined, ms: number): AbortSignal {
+  const timeout = AbortSignal.timeout(Math.max(1, ms));
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
 
 function step(kind: AgentStep["kind"], title: string, detail?: string, round?: number): AgentStep {
   return {
@@ -75,6 +101,15 @@ export async function* runAgent(input: RunAgentInput): AsyncGenerator<StreamEven
   const provider = input.provider ?? getProvider();
   const maxRounds = input.maxRounds ?? readAgentMaxRounds();
   const warnings: string[] = [];
+
+  // Two deadlines from one budget: research must stop at the first so the answer
+  // can be written and saved before the second, which is the hard stop.
+  const startedAt = Date.now();
+  const totalBudgetMs = input.budgetMs ?? readAgentBudgetMs();
+  const researchDeadline = startedAt + Math.max(0, totalBudgetMs - ANSWER_ALLOWANCE_MS);
+  const hardDeadline = startedAt + totalBudgetMs;
+  const researchTimeLeft = (): number => researchDeadline - Date.now();
+  let truncationReported = false;
 
   const context: ToolContext = {
     bundles: input.bundles,
@@ -118,6 +153,9 @@ export async function* runAgent(input: RunAgentInput): AsyncGenerator<StreamEven
   let finalAnswerRequested = false;
 
   while (rounds < maxRounds && totalToolCalls < TOTAL_TOOL_CALL_BUDGET && !finalAnswerRequested) {
+    // Checked before the round starts, so a round is never begun that cannot
+    // finish inside the research window.
+    if (researchTimeLeft() <= 0) break;
     rounds += 1;
     if (input.signal?.aborted) break;
 
@@ -141,10 +179,13 @@ export async function* runAgent(input: RunAgentInput): AsyncGenerator<StreamEven
         ],
         json: true,
         temperature: 0,
-        signal: input.signal,
+        signal: withDeadline(input.signal, researchTimeLeft()),
       });
     } catch (error) {
       if (input.signal?.aborted) break;
+      // A planner call cut off by the deadline is not a provider failure; the
+      // time limit is reported below instead of blaming the provider.
+      if (researchTimeLeft() <= 0) break;
       plannerFailed = true;
       warnings.push(
         error instanceof LlmError
@@ -171,7 +212,7 @@ export async function* runAgent(input: RunAgentInput): AsyncGenerator<StreamEven
           ],
           json: true,
           temperature: 0,
-          signal: input.signal,
+          signal: withDeadline(input.signal, researchTimeLeft()),
         });
         parsed = parseJsonObject(raw);
       } catch {
@@ -269,13 +310,27 @@ export async function* runAgent(input: RunAgentInput): AsyncGenerator<StreamEven
 
   if (rounds >= maxRounds && !finalAnswerRequested) {
     truncated = true;
+    truncationReported = true;
     warnings.push(`Research stopped at the round limit of ${maxRounds}; the answer uses the evidence gathered so far.`);
     yield { type: "warning", message: warnings[warnings.length - 1] ?? "Round limit reached." };
   }
   if (totalToolCalls >= TOTAL_TOOL_CALL_BUDGET && !finalAnswerRequested) {
     truncated = true;
+    truncationReported = true;
     warnings.push(`Research stopped at the tool-call limit of ${TOTAL_TOOL_CALL_BUDGET}.`);
     yield { type: "warning", message: warnings[warnings.length - 1] ?? "Tool-call limit reached." };
+  }
+  // Whichever way the loop ended, running out of time means research was cut
+  // short, and the answer must not sound as though it read everything.
+  if (!finalAnswerRequested && researchTimeLeft() <= 0) {
+    truncated = true;
+    if (!truncationReported) {
+      truncationReported = true;
+      warnings.push(
+        `Research stopped at the time limit for one answer (${Math.round(totalBudgetMs / 1000)}s); the answer below uses the evidence gathered so far.`,
+      );
+      yield { type: "warning", message: warnings[warnings.length - 1] ?? "Time limit reached." };
+    }
   }
   if (plannerFailed) truncated = true;
 
@@ -305,7 +360,11 @@ export async function* runAgent(input: RunAgentInput): AsyncGenerator<StreamEven
   let streamFailed = false;
 
   try {
-    for await (const token of provider.stream({ messages: answerMessages, temperature: 0.1, signal: input.signal })) {
+    for await (const token of provider.stream({
+      messages: answerMessages,
+      temperature: 0.1,
+      signal: withDeadline(input.signal, hardDeadline - Date.now()),
+    })) {
       content += token;
       yield { type: "token", text: token };
 
@@ -337,6 +396,13 @@ export async function* runAgent(input: RunAgentInput): AsyncGenerator<StreamEven
     streamFailed = true;
     if (input.signal?.aborted) {
       warnings.push("Generation was stopped. The part that was written has been kept.");
+    } else if (Date.now() >= hardDeadline) {
+      // The deadline is the app stopping itself, which is deliberate and is
+      // reported as a time limit rather than as a provider error.
+      warnings.push(
+        "The time limit for one answer was reached, so this answer is incomplete. The part that was written has been kept.",
+      );
+      yield { type: "warning", message: warnings[warnings.length - 1] ?? "Time limit reached." };
     } else {
       warnings.push(
         error instanceof LlmError

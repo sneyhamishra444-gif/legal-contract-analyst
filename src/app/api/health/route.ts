@@ -1,6 +1,6 @@
 import { jsonOk } from "@/lib/api/responses";
 import { describeDbTarget, getDb, storageNote } from "@/lib/db";
-import { readAgentMaxRounds, readLlmConfig } from "@/lib/llm/config";
+import { readAgentBudgetMs, readAgentMaxRounds, readLlmConfig } from "@/lib/llm/config";
 
 export const runtime = "nodejs";
 
@@ -33,6 +33,6 @@ export async function GET(): Promise<Response> {
       model: config.model,
       mode: config.apiKey ? "language model" : "offline deterministic extractor",
     },
-    agent: { maxRounds: readAgentMaxRounds() },
+    agent: { maxRounds: readAgentMaxRounds(), budgetMs: readAgentBudgetMs() },
   });
 }

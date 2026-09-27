@@ -42,6 +42,26 @@ export function readAgentMaxRounds(env: NodeJS.ProcessEnv = process.env): number
   return Math.min(10, Math.max(2, parsed));
 }
 
+/**
+ * Wall-clock budget for one complete run: research plus writing the answer.
+ *
+ * The round and tool-call caps bound how much work happens; this bounds how long
+ * it takes, which is a different thing and the one a hosting platform enforces.
+ * Without it, a slow provider gets the request killed mid-sentence by the
+ * platform: the stream stops wherever it was and nothing is saved. With it, the
+ * app stops on its own terms and produces a shorter answer that says research was
+ * cut short.
+ *
+ * The default sits inside a 60-second serverless function limit with room left
+ * over to write and persist the answer. The floor is above the amount reserved
+ * for the answer, so raising it can never leave research with no time at all.
+ */
+export function readAgentBudgetMs(env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Number.parseInt(env.AGENT_BUDGET_MS ?? "50000", 10);
+  if (!Number.isFinite(parsed)) return 50_000;
+  return Math.min(600_000, Math.max(25_000, parsed));
+}
+
 export function describeProvider(config: LlmConfig): string {
   return config.apiKey ? `${config.model} via ${config.baseUrl}` : "offline deterministic extractor (no API key set)";
 }
